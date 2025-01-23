@@ -1,10 +1,13 @@
 import streamlit as st
-import face_recognition
 import cv2
+import face_recognition
 import numpy as np
+import tempfile
 import os
+from PIL import Image
 
-# Fungsi untuk memuat dataset wajah
+# Fungsi untuk memuat dataset wajah (dengan caching)
+@st.cache_resource
 def load_dataset(dataset_path="dataset"):
     known_face_encodings = []
     known_face_names = []
@@ -21,78 +24,88 @@ def load_dataset(dataset_path="dataset"):
     
     return known_face_encodings, known_face_names
 
-# Fungsi untuk memulai kamera dan memproses wajah
-def recognize_faces(known_face_encodings, known_face_names):
-    cap = cv2.VideoCapture(0)
-    attendance = []
+# Fungsi untuk pengenalan wajah
+def recognize_faces(image, known_face_encodings, known_face_names):
+    rgb_image = np.array(image.convert('RGB'))
+    face_locations = face_recognition.face_locations(rgb_image)
+    face_encodings = face_recognition.face_encodings(rgb_image, face_locations)
 
-    st.write("Tekan 'q' pada jendela kamera untuk keluar.")
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            st.error("Gagal mengakses kamera!")
-            break
+    recognized_names = []
+    for face_encoding in face_encodings:
+        matches = face_recognition.compare_faces(known_face_encodings, face_encoding)
+        name = "Unknown"
+        face_distances = face_recognition.face_distance(known_face_encodings, face_encoding)
+        best_match_index = np.argmin(face_distances)
+        if matches[best_match_index]:
+            name = known_face_names[best_match_index]
+        recognized_names.append(name)
+    return face_locations, recognized_names
 
-        # Deteksi wajah di frame
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        face_locations = face_recognition.face_locations(rgb_frame)
-        face_encodings = face_recognition.face_encodings(rgb_frame, face_locations)
-
-        for face_encoding, face_location in zip(face_encodings, face_locations):
-            matches = face_recognition.compare_faces(known_face_encodings, face_encoding)
-            name = "Unknown"
-
-            face_distances = face_recognition.face_distance(known_face_encodings, face_encoding)
-            best_match_index = np.argmin(face_distances)
-            if matches[best_match_index]:
-                name = known_face_names[best_match_index]
-
-            # Tampilkan nama pada frame
-            top, right, bottom, left = face_location
-            cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
-            cv2.putText(frame, name, (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
-
-            # Catat kehadiran
-            if name != "Unknown" and name not in attendance:
-                attendance.append(name)
-                st.success(f"{name} berhasil diabsen!")
-
-        # Tampilkan kamera
-        cv2.imshow("Face Recognition Attendance", frame)
-
-        # Keluar dengan menekan 'q'
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
-
-    cap.release()
-    cv2.destroyAllWindows()
-    return attendance
+# Fungsi untuk menampilkan bounding box pada wajah
+def draw_bounding_boxes(image, face_locations, recognized_names):
+    image_np = np.array(image)
+    for (top, right, bottom, left), name in zip(face_locations, recognized_names):
+        cv2.rectangle(image_np, (left, top), (right, bottom), (0, 255, 0), 2)
+        cv2.putText(image_np, name, (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
+    return Image.fromarray(image_np)
 
 # Streamlit UI
-st.title("OUTING FP&A 2025")
-st.write("Arahkan wajah ke kamera untuk absen. Tekan tombol di bawah untuk memulai.")
+st.title("Absensi Wajah - FP&A 2025")
+st.write("Aktifkan kamera, arahkan wajah Anda, lalu tekan tombol untuk mengambil gambar.")
 
-# Load dataset
+# Load dataset wajah
 st.info("Memuat dataset wajah...")
 known_face_encodings, known_face_names = load_dataset()
 
-# Tombol untuk memulai pengenalan wajah
-if st.button("Mulai Absensi"):
-    st.write("Buka kamera dan arahkan wajah peserta.")
-    attendance = recognize_faces(known_face_encodings, known_face_names)
-    
-    # Tampilkan hasil absensi
-    st.subheader("Daftar Hadir")
-    if attendance:
-        st.write(attendance)
-    else:
-        st.warning("Tidak ada peserta yang diabsen.")
+# Video capture
+cap = cv2.VideoCapture(0)
+if not cap.isOpened():
+    st.error("Tidak dapat mengakses kamera!")
 
-# Ekspor daftar hadir
-if "attendance" in locals():
-    st.download_button(
-        label="Download Absensi",
-        data="\n".join(attendance),
-        file_name="absensi_wajah.txt",
-        mime="text/plain",
-    )
+FRAME_WINDOW = st.image([])
+captured_image = None
+
+# Stream kamera di Streamlit
+while cap.isOpened():
+    ret, frame = cap.read()
+    if not ret:
+        st.error("Gagal membaca frame dari kamera!")
+        break
+
+    # Tampilkan kamera di Streamlit
+    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    FRAME_WINDOW.image(frame)
+
+    # Tombol untuk menangkap gambar
+    if st.button("Tangkap Gambar"):
+        captured_image = frame
+        st.success("Gambar berhasil ditangkap!")
+        break
+
+cap.release()
+
+# Jika gambar berhasil ditangkap
+if captured_image is not None:
+    st.subheader("Gambar yang Ditangkap")
+    st.image(captured_image, caption="Gambar yang Ditangkap", use_column_width=True)
+
+    # Lakukan pengenalan wajah
+    st.info("Melakukan pengenalan wajah...")
+    pil_image = Image.fromarray(captured_image)
+    face_locations, recognized_names = recognize_faces(pil_image, known_face_encodings, known_face_names)
+
+    # Tampilkan hasil pengenalan
+    if recognized_names:
+        st.subheader("Hasil Pengenalan Wajah")
+        for name in recognized_names:
+            st.write(f"Wajah dikenali sebagai: **{name}**")
+            if st.button(f"Konfirmasi Kehadiran untuk {name}"):
+                st.success(f"Kehadiran untuk {name} telah dicatat.")
+            else:
+                st.warning(f"Klik tombol untuk konfirmasi kehadiran.")
+
+        # Tampilkan bounding box di gambar
+        result_image = draw_bounding_boxes(pil_image, face_locations, recognized_names)
+        st.image(result_image, caption="Hasil dengan Bounding Box", use_column_width=True)
+    else:
+        st.warning("Tidak ada wajah yang dikenali. Coba lagi.")
