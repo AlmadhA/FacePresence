@@ -10,7 +10,7 @@ def load_dataset(dataset_path="dataset"):
     known_face_names = []
     
     for file in os.listdir(dataset_path):
-        if file.endswith(".jpg") or file.endswith(".png"):
+        if file.endswith(".jpg") or file.endswith(".jpeg") or file.endswith(".png"):
             image_path = os.path.join(dataset_path, file)
             image = face_recognition.load_image_file(image_path)
             encoding = face_recognition.face_encodings(image)[0]
